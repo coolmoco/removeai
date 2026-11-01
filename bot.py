@@ -13,10 +13,31 @@ import random
 import subprocess
 import tempfile
 import uuid
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
+
+
+# ==================== HEALTH SERVER ====================
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is alive")
+
+    def log_message(self, format, *args):
+        pass
+
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    print(f"Health server running on port {port}")
+    server.serve_forever()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -39,34 +60,28 @@ def enhance_image(img: Image.Image) -> Image.Image:
 
     original_size = img.size
 
-    # stronger rotation
     angle = random.uniform(0.08, 0.18) * random.choice([-1, 1])
     img = img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False)
     img = img.rotate(-angle, resample=Image.Resampling.BICUBIC, expand=False)
 
-    # more scale difference
     w, h = img.size
     factor = random.uniform(0.985, 0.995)
     img = img.resize((int(w * factor), int(h * factor)), Image.Resampling.LANCZOS)
     img = img.resize(original_size, Image.Resampling.LANCZOS)
 
-    # stronger noise
     noise = Image.effect_noise(img.size, random.uniform(4.0, 7.0))
     noise = noise.convert("L")
     noise = ImageEnhance.Brightness(noise).enhance(random.uniform(0.08, 0.15))
     img = Image.blend(img, noise.convert("RGB"), random.uniform(0.06, 0.11))
 
-    # stronger channel shift
     r, g, b = img.split()
     r = ImageEnhance.Brightness(r).enhance(random.uniform(0.97, 1.04))
     g = ImageEnhance.Brightness(g).enhance(random.uniform(0.96, 1.03))
     b = ImageEnhance.Brightness(b).enhance(random.uniform(0.97, 1.04))
     img = Image.merge("RGB", (r, g, b))
 
-    # stronger color
     img = ImageEnhance.Color(img).enhance(random.uniform(1.10, 1.22))
 
-    # warm or cool tint
     r, g, b = img.split()
     if random.random() > 0.5:
         r = ImageEnhance.Brightness(r).enhance(random.uniform(1.03, 1.07))
@@ -76,7 +91,6 @@ def enhance_image(img: Image.Image) -> Image.Image:
         b = ImageEnhance.Brightness(b).enhance(random.uniform(1.03, 1.07))
     img = Image.merge("RGB", (r, g, b))
 
-    # stronger sharpen + contrast
     img = img.filter(ImageFilter.UnsharpMask(radius=1.4, percent=130, threshold=1))
     img = ImageEnhance.Contrast(img).enhance(random.uniform(1.10, 1.20))
     img = ImageEnhance.Sharpness(img).enhance(random.uniform(1.3, 1.7))
@@ -102,7 +116,6 @@ def enhance_video(input_path: str, output_path: str) -> bool:
     except Exception:
         duration = 0
 
-    # stronger random values
     hue_shift = random.uniform(-8, 8)
     sat = random.uniform(1.12, 1.25)
     contrast = random.uniform(1.10, 1.20)
@@ -170,7 +183,6 @@ async def process_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         status = await update.message.reply_text("⌛")
 
-        # ==================== IMAGE ====================
         if update.message.photo or (
             update.message.document
             and update.message.document.mime_type
@@ -194,7 +206,6 @@ async def process_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await update.message.reply_photo(photo=out, caption="Ready")
 
-        # ==================== VIDEO ====================
         elif update.message.video or (
             update.message.document
             and update.message.document.mime_type
@@ -271,6 +282,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    # Health server start karo
+    health_thread = threading.Thread(target=start_health_server, daemon=True)
+    health_thread.start()
+
     app = (
         Application.builder()
         .token(TOKEN)
