@@ -1,4 +1,4 @@
-from telegram import Update, MessageEntity
+from telegram import Update
 from telegram.ext import (
     Application,
     MessageHandler,
@@ -6,7 +6,7 @@ from telegram.ext import (
     ContextTypes,
     CommandHandler
 )
-from PIL import Image, ImageFilter, ImageEnhance
+from PIL import Image, ImageEnhance, ImageFilter
 import io
 import os
 import random
@@ -18,56 +18,164 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text_parts = []
-    entities = []
-    current_offset = 0
+    text = (
+        "Welcome!\n\n"
+        "Just send me any image or video and I will clean it for you.\n"
+        "This helps remove metadata and makes the file look unique so platforms treat it as original content.\n\n"
+        "What I do:\n"
+        "• Remove all metadata\n"
+        "• Visible visual + color changes\n"
+        "• Re-encode for uniqueness\n\n"
+        "For any help contact @pvnuo"
+    )
+    await update.message.reply_text(text)
 
-    def add_text(s: str):
-        nonlocal current_offset
-        text_parts.append(s)
-        current_offset += len(s.encode("utf-16-le")) // 2
 
-    def add_custom(emoji_id: str, placeholder: str = "🔥"):
-        nonlocal current_offset
-        text_parts.append(placeholder)
-        length = len(placeholder.encode("utf-16-le")) // 2
-        entities.append(MessageEntity(
-            type=MessageEntity.CUSTOM_EMOJI,
-            offset=current_offset,
-            length=length,
-            custom_emoji_id=str(emoji_id)
-        ))
-        current_offset += length
+def enhance_image(img: Image.Image) -> Image.Image:
+    if img.mode != "RGB":
+        img = img.convert("RGB")
 
-    add_text("Welcome to AI-Label-Remover\n\n")
-    add_text("Send any image or video (photo or file) and I will clean it for posting.\n\n")
-    add_text("• Removes metadata & technical fingerprints\n")
-    add_text("• High-quality re-encode\n")
-    add_text("• Helps reduce AI labels on ")
-    add_custom("6203873525116183636")   # X
-    add_text(" ")
-    add_custom("6201514939530618666")   # Instagram
-    add_text(" ")
-    add_custom("6204008550298033491")   # TikTok
-    add_text(" ")
-    add_custom("6237902409268470232")   # YouTube
-    add_text("\n\n")
-    add_text("Note: No tool can completely remove AI signatures from every file. Results vary by platform and content, but this bot works well on many images & videos.\n\n")
-    add_text("For help contact @pvnuo ")
-    add_custom("6201528571756815592")   # black hair
+    original_size = img.size
 
-    text = "".join(text_parts)
-    await update.message.reply_text(text, entities=entities)
+    # stronger rotation
+    angle = random.uniform(0.08, 0.18) * random.choice([-1, 1])
+    img = img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False)
+    img = img.rotate(-angle, resample=Image.Resampling.BICUBIC, expand=False)
+
+    # more scale difference
+    w, h = img.size
+    factor = random.uniform(0.985, 0.995)
+    img = img.resize((int(w * factor), int(h * factor)), Image.Resampling.LANCZOS)
+    img = img.resize(original_size, Image.Resampling.LANCZOS)
+
+    # stronger noise
+    noise = Image.effect_noise(img.size, random.uniform(4.0, 7.0))
+    noise = noise.convert("L")
+    noise = ImageEnhance.Brightness(noise).enhance(random.uniform(0.08, 0.15))
+    img = Image.blend(img, noise.convert("RGB"), random.uniform(0.06, 0.11))
+
+    # stronger channel shift
+    r, g, b = img.split()
+    r = ImageEnhance.Brightness(r).enhance(random.uniform(0.97, 1.04))
+    g = ImageEnhance.Brightness(g).enhance(random.uniform(0.96, 1.03))
+    b = ImageEnhance.Brightness(b).enhance(random.uniform(0.97, 1.04))
+    img = Image.merge("RGB", (r, g, b))
+
+    # stronger color
+    img = ImageEnhance.Color(img).enhance(random.uniform(1.10, 1.22))
+
+    # warm or cool tint
+    r, g, b = img.split()
+    if random.random() > 0.5:
+        r = ImageEnhance.Brightness(r).enhance(random.uniform(1.03, 1.07))
+        b = ImageEnhance.Brightness(b).enhance(random.uniform(0.94, 0.98))
+    else:
+        r = ImageEnhance.Brightness(r).enhance(random.uniform(0.94, 0.98))
+        b = ImageEnhance.Brightness(b).enhance(random.uniform(1.03, 1.07))
+    img = Image.merge("RGB", (r, g, b))
+
+    # stronger sharpen + contrast
+    img = img.filter(ImageFilter.UnsharpMask(radius=1.4, percent=130, threshold=1))
+    img = ImageEnhance.Contrast(img).enhance(random.uniform(1.10, 1.20))
+    img = ImageEnhance.Sharpness(img).enhance(random.uniform(1.3, 1.7))
+
+    return img
+
+
+def enhance_video(input_path: str, output_path: str) -> bool:
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                input_path
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15
+        )
+        duration = float(probe.stdout.strip())
+    except Exception:
+        duration = 0
+
+    # stronger random values
+    hue_shift = random.uniform(-8, 8)
+    sat = random.uniform(1.12, 1.25)
+    contrast = random.uniform(1.10, 1.20)
+    brightness = random.uniform(0.02, 0.06)
+
+    if duration > 2.2:
+        ss = 0.5
+        t = duration - 1.0
+        vf = (
+            f"trim=start={ss}:duration={t},"
+            "setpts=PTS-STARTPTS,"
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2,"
+            f"eq=contrast={contrast}:brightness={brightness}:saturation={sat},"
+            f"hue=h={hue_shift},"
+            "unsharp=5:5:1.0:5:5:0.5,"
+            "format=yuv420p"
+        )
+    else:
+        vf = (
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2,"
+            f"eq=contrast={contrast}:brightness={brightness}:saturation={sat},"
+            f"hue=h={hue_shift},"
+            "unsharp=5:5:1.0:5:5:0.5,"
+            "format=yuv420p"
+        )
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-map_metadata", "-1",
+        "-map", "0:v:0",
+        "-map", "0:a:0?",
+        "-vf", vf,
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "21",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        "-pix_fmt", "yuv420p",
+        "-threads", "2",
+        output_path
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=180
+        )
+        return (
+            result.returncode == 0
+            and os.path.exists(output_path)
+            and os.path.getsize(output_path) > 4000
+        )
+    except Exception:
+        return False
+
 
 async def process_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status_msg = None
+    status = None
     temp_files = []
 
     try:
-        status_msg = await update.message.reply_text("⌛")
+        status = await update.message.reply_text("⌛")
 
-        if update.message.photo or (update.message.document and update.message.document.mime_type and update.message.document.mime_type.startswith("image/")):
+        # ==================== IMAGE ====================
+        if update.message.photo or (
+            update.message.document
+            and update.message.document.mime_type
+            and update.message.document.mime_type.startswith("image/")
+        ):
             if update.message.photo:
                 file = await update.message.photo[-1].get_file()
             else:
@@ -77,95 +185,43 @@ async def process_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await file.download_to_memory(bio)
             bio.seek(0)
 
-            img = Image.open(bio).convert("RGB")
-            original_size = img.size
-
-            data = list(img.getdata())
-            clean = Image.new(img.mode, img.size)
-            clean.putdata(data)
-
-            angle = random.uniform(0.03, 0.08) * random.choice([-1, 1])
-            clean = clean.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False)
-            clean = clean.rotate(-angle, resample=Image.Resampling.BICUBIC, expand=False)
-
-            w, h = clean.size
-            factor = random.uniform(0.995, 0.999)
-            clean = clean.resize((int(w * factor), int(h * factor)), Image.Resampling.LANCZOS)
-            clean = clean.resize(original_size, Image.Resampling.LANCZOS)
-
-            noise = Image.effect_noise(clean.size, random.uniform(0.8, 1.6))
-            noise = noise.convert("L")
-            noise = ImageEnhance.Brightness(noise).enhance(random.uniform(0.03, 0.07))
-            clean = Image.blend(clean, noise.convert("RGB"), random.uniform(0.015, 0.035))
-
-            r, g, b = clean.split()
-            r = ImageEnhance.Brightness(r).enhance(random.uniform(0.998, 1.002))
-            g = ImageEnhance.Brightness(g).enhance(random.uniform(0.998, 1.002))
-            b = ImageEnhance.Brightness(b).enhance(random.uniform(0.998, 1.002))
-            clean = Image.merge("RGB", (r, g, b))
-
-            clean = clean.filter(ImageFilter.UnsharpMask(
-                radius=random.uniform(0.5, 0.9),
-                percent=random.randint(50, 85),
-                threshold=2
-            ))
-
-            enhancer = ImageEnhance.Contrast(clean)
-            clean = enhancer.enhance(random.uniform(1.01, 1.04))
-
-            temp = io.BytesIO()
-            clean.save(temp, format="PNG", optimize=True)
-            temp.seek(0)
-            clean = Image.open(temp).convert("RGB")
+            img = Image.open(bio)
+            clean = enhance_image(img)
 
             out = io.BytesIO()
-            clean.save(out, format="JPEG", quality=97, optimize=True, progressive=True, subsampling=0)
+            clean.save(out, format="JPEG", quality=91, optimize=True)
             out.seek(0)
 
-            clean2 = Image.open(out).convert("RGB")
-            out2 = io.BytesIO()
-            clean2.save(out2, format="JPEG", quality=96, optimize=True, progressive=True, subsampling=0)
-            out2.seek(0)
+            await update.message.reply_photo(photo=out, caption="Ready")
 
-            await update.message.reply_photo(photo=out2, caption="Ready")
-
-        elif update.message.video or (update.message.document and update.message.document.mime_type and update.message.document.mime_type.startswith("video/")):
+        # ==================== VIDEO ====================
+        elif update.message.video or (
+            update.message.document
+            and update.message.document.mime_type
+            and update.message.document.mime_type.startswith("video/")
+        ):
             if update.message.video:
-                file = await update.message.video.get_file()
+                tg_file = update.message.video
             else:
-                file = await update.message.document.get_file()
+                tg_file = update.message.document
 
-            input_path = os.path.join(tempfile.gettempdir(), f"in_{uuid.uuid4().hex}.mp4")
-            output_path = os.path.join(tempfile.gettempdir(), f"out_{uuid.uuid4().hex}.mp4")
+            if tg_file.file_size and tg_file.file_size > 19 * 1024 * 1024:
+                await status.edit_text("File too big (max 19 MB)")
+                return
+
+            file = await tg_file.get_file()
+            uid = uuid.uuid4().hex[:8]
+
+            input_path = os.path.join(tempfile.gettempdir(), f"in_{uid}.mp4")
+            output_path = os.path.join(tempfile.gettempdir(), f"out_{uid}.mp4")
             temp_files.extend([input_path, output_path])
 
             await file.download_to_drive(input_path)
 
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", input_path,
-                "-map_metadata", "-1",
-                "-c:v", "libx264",
-                "-crf", "17",
-                "-preset", "medium",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-movflags", "+faststart",
-                output_path
-            ]
-
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=300
-            )
-
-            if result.returncode != 0:
-                error_msg = result.stderr[-600:] if result.stderr else "Unknown FFmpeg error"
-                raise Exception(f"FFmpeg failed:\n{error_msg}")
+            success = enhance_video(input_path, output_path)
+            if not success:
+                await status.edit_text("Video processing failed")
+                return
 
             with open(output_path, "rb") as f:
                 await update.message.reply_video(
@@ -175,29 +231,44 @@ async def process_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
 
         else:
-            await status_msg.edit_text("Send image or video only.")
+            await status.edit_text("Send image or video only")
             return
 
-        if status_msg:
-            await status_msg.delete()
+        try:
+            await status.delete()
+        except Exception:
+            pass
 
     except Exception as e:
-        error_text = str(e)[:900]
-        if status_msg:
+        error_msg = str(e)[:400]
+        if status:
             try:
-                await status_msg.edit_text(f"Failed:\n{error_text}")
-            except:
-                await update.message.reply_text(f"Failed:\n{error_text}")
+                await status.edit_text(f"Failed: {error_msg}")
+            except Exception:
+                await update.message.reply_text(f"Failed: {error_msg}")
         else:
-            await update.message.reply_text(f"Failed:\n{error_text}")
+            await update.message.reply_text(f"Failed: {error_msg}")
 
     finally:
         for f in temp_files:
             try:
                 if os.path.exists(f):
                     os.remove(f)
-            except:
+            except Exception:
                 pass
+
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "Just send me any image or video and I will modify it for you.\n\n"
+        "What I do:\n"
+        "• Remove metadata\n"
+        "• Make clear visual + color changes so it looks unique\n"
+        "• Help reduce AI / unoriginal content detections\n\n"
+        "For any help contact @pvnuo"
+    )
+    await update.message.reply_text(text)
+
 
 def main():
     app = (
@@ -206,7 +277,6 @@ def main():
         .read_timeout(60)
         .write_timeout(60)
         .connect_timeout(60)
-        .pool_timeout(60)
         .build()
     )
 
@@ -215,9 +285,11 @@ def main():
         filters.PHOTO | filters.Document.IMAGE | filters.VIDEO | filters.Document.VIDEO,
         process_media
     ))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     print("Bot started...")
     app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     main()
